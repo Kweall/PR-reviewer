@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: pruser
+      POSTGRES_PASSWORD: prpass
+      POSTGRES_DB: prdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  migrator:
+    image: postgres:15
+    depends_on:
+      - db
+    environment:
+      POSTGRES_USER: pruser
+      POSTGRES_PASSWORD: prpass
+      POSTGRES_DB: prdb
+    volumes:
+      - ./migrations.sql:/docker-entrypoint-initdb.d/migrations.sql:ro
+    entrypoint: ["bash", "-c", "psql postgresql://pruser:prpass@db:5432/prdb -f /docker-entrypoint-initdb.d/migrations.sql"]
+
+  app:
+    build: .
+    depends_on:
+      - db
+      - migrator
+    environment:
+      - DATABASE_DSN=postgres://pruser:prpass@db:5432/prdb?sslmode=disable
+      - PORT=8080
+    ports:
+      - "8080:8080"
+
+volumes:
+  db_data:
