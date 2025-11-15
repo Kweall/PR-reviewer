@@ -1,0 +1,11 @@
+services:
+  k6:
+    image: grafana/k6
+    depends_on:
+      - app
+    environment:
+      - BASE_URL=http://app:8080
+    volumes:
+      - ./load-test:/scripts
+    command: ["run", "/scripts/scripts/run_all.js"]
+

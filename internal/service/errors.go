@@ -10,4 +10,5 @@ var (
 	ErrNoCandidate    = errors.New("no candidate")
 	ErrUnknownJobType = errors.New("unknown job type")
 	ErrJobQueueFull   = errors.New("job queue full")
+	ErrUserInactive   = errors.New("user inactive")
 )

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -35,74 +36,56 @@ func writeError(w http.ResponseWriter, code int, errCode, msg string) {
 	})
 }
 
-// /team/add
+func decodeJSON(body io.ReadCloser, v interface{}) error {
+	defer body.Close()
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(v)
+}
+
 func (h *Handler) AddTeam(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	h.log.Info("received request AddTeam")
+
 	var team models.Team
-	if err := json.NewDecoder(r.Body).Decode(&team); err != nil {
+	if err := decodeBody(r, &team); err != nil {
 		h.log.Warn("invalid request body", "error", err)
-		writeError(w, 400, "INVALID", "invalid body")
+		writeError(w, http.StatusBadRequest, "INVALID", "invalid body")
 		return
 	}
-	if team.TeamName == "" {
-		h.log.Warn("team_name missing in request")
-		writeError(w, 400, "INVALID", "team_name required")
+
+	if err := validateTeam(team); err != nil {
+		h.log.Warn("validation failed", "team", team, "error", err)
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
 		return
 	}
-	if err := h.svc.AddTeam(team); err != nil {
+
+	if err := h.svc.AddTeam(ctx, team); err != nil {
 		h.log.Error("failed to add team", "team", team.TeamName, "error", err)
-		writeError(w, 500, "ERROR", err.Error())
+		writeError(w, http.StatusInternalServerError, "ERROR", err.Error())
 		return
 	}
-	writeJSON(w, 201, map[string]interface{}{"team": team})
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"team": team})
 }
 
-// /team/get?team_name=...
-func (h *Handler) GetTeam(w http.ResponseWriter, r *http.Request) {
-	teamName := r.URL.Query().Get("team_name")
-	h.log.Info("received request GetTeam", "team_name", teamName)
-	if teamName == "" {
-		h.log.Warn("team_name missing in request")
-		writeError(w, 400, "INVALID", "team_name required")
-		return
-	}
-
-	job := service.Job{
-		Type: "get_team",
-		Payload: map[string]interface{}{
-			"team": teamName,
-		},
-		RespCh: make(chan service.JobResult, 1),
-	}
-
-	h.svc.EnqueueJob(job)
-	res := <-job.RespCh
-	if res.Error != nil {
-		if errors.Is(res.Error, service.ErrNotFound) {
-			writeError(w, 404, "NOT_FOUND", "team not found")
-			return
-		}
-		writeError(w, 500, "ERROR", res.Error.Error())
-		return
-	}
-	writeJSON(w, 200, res.Data)
-}
-
-// /users/setIsActive
 func (h *Handler) SetIsActive(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	h.log.Info("received request SetIsActive")
+
 	var payload struct {
 		UserID   string `json:"user_id"`
 		IsActive bool   `json:"is_active"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeBody(r, &payload); err != nil {
 		h.log.Warn("invalid request body", "error", err)
-		writeError(w, 400, "INVALID", "invalid body")
+		writeError(w, http.StatusBadRequest, "INVALID", "invalid body")
 		return
 	}
-	if payload.UserID == "" {
-		h.log.Warn("user_id missing in request")
-		writeError(w, 400, "INVALID", "user_id required")
+
+	if err := validateSetActivePayload(payload); err != nil {
+		h.log.Warn("validation failed", "user_id", payload.UserID, "error", err)
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
 		return
 	}
 
@@ -113,38 +96,46 @@ func (h *Handler) SetIsActive(w http.ResponseWriter, r *http.Request) {
 			"active": payload.IsActive,
 		},
 		RespCh: make(chan service.JobResult, 1),
+		Ctx:    ctx,
 	}
 	h.svc.EnqueueJob(job)
-	res := <-job.RespCh
-	if res.Error != nil {
-		if errors.Is(res.Error, service.ErrNotFound) {
-			writeError(w, 404, "NOT_FOUND", "user not found")
-			return
-		}
-		writeError(w, 500, "ERROR", res.Error.Error())
+
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
 		return
 	}
 
-	writeJSON(w, 200, map[string]interface{}{"user": res.Data})
+	if res.Error != nil {
+		if errors.Is(res.Error, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "user not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "ERROR", res.Error.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"user": res.Data})
 }
 
-// /pullRequest/create
 func (h *Handler) CreatePR(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	h.log.Info("received request CreatePR")
-	b, _ := io.ReadAll(r.Body)
+
 	var payload struct {
 		PullRequestID   string `json:"pull_request_id"`
 		PullRequestName string `json:"pull_request_name"`
 		AuthorID        string `json:"author_id"`
 	}
-	if err := json.Unmarshal(b, &payload); err != nil {
+	if err := decodeBody(r, &payload); err != nil {
 		h.log.Warn("invalid request body", "error", err)
-		writeError(w, 400, "INVALID", "invalid body")
+		writeError(w, http.StatusBadRequest, "INVALID", "invalid body")
 		return
 	}
-	if payload.PullRequestID == "" || payload.PullRequestName == "" || payload.AuthorID == "" {
-		h.log.Warn("missing fields in request", "payload", payload)
-		writeError(w, 400, "INVALID", "missing fields")
+
+	if err := validateCreatePRPayload(payload); err != nil {
+		h.log.Warn("validation failed", "payload", payload, "error", err)
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
 		return
 	}
 
@@ -160,38 +151,47 @@ func (h *Handler) CreatePR(w http.ResponseWriter, r *http.Request) {
 			"pr": pr,
 		},
 		RespCh: make(chan service.JobResult, 1),
+		Ctx:    ctx,
 	}
 	h.svc.EnqueueJob(job)
-	res := <-job.RespCh
+
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
+		return
+	}
+
 	if res.Error != nil {
 		switch {
 		case errors.Is(res.Error, service.ErrNotFound):
-			writeError(w, 404, "NOT_FOUND", "author/team not found")
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "author/team not found")
 		case errors.Is(res.Error, service.ErrPRExists):
-			writeError(w, 409, "PR_EXISTS", "PR id already exists")
+			writeError(w, http.StatusConflict, "PR_EXISTS", "PR id already exists")
 		default:
-			writeError(w, 500, "ERROR", res.Error.Error())
+			writeError(w, http.StatusInternalServerError, "ERROR", res.Error.Error())
 		}
 		return
 	}
 
-	writeJSON(w, 201, map[string]interface{}{"pr": res.Data})
+	writeJSON(w, http.StatusCreated, map[string]interface{}{"pr": res.Data})
 }
 
-// /pullRequest/merge
 func (h *Handler) MergePR(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	h.log.Info("received request MergePR")
+
 	var payload struct {
 		PullRequestID string `json:"pull_request_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeBody(r, &payload); err != nil {
 		h.log.Warn("invalid request body", "error", err)
-		writeError(w, 400, "INVALID", "invalid body")
+		writeError(w, http.StatusBadRequest, "INVALID", "invalid body")
 		return
 	}
-	if payload.PullRequestID == "" {
-		h.log.Warn("pull_request_id missing in request")
-		writeError(w, 400, "INVALID", "pull_request_id required")
+
+	if err := validateMergePRPayload(payload); err != nil {
+		h.log.Warn("validation failed", "pull_request_id", payload.PullRequestID, "error", err)
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
 		return
 	}
 
@@ -201,38 +201,45 @@ func (h *Handler) MergePR(w http.ResponseWriter, r *http.Request) {
 			"pr_id": payload.PullRequestID,
 		},
 		RespCh: make(chan service.JobResult, 1),
+		Ctx:    ctx,
 	}
-
 	h.svc.EnqueueJob(job)
-	res := <-job.RespCh
 
-	if res.Error != nil {
-		if errors.Is(res.Error, service.ErrNotFound) {
-			writeError(w, 404, "NOT_FOUND", "pr not found")
-			return
-		}
-		writeError(w, 500, "ERROR", res.Error.Error())
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
 		return
 	}
 
-	writeJSON(w, 200, map[string]interface{}{"pr": res.Data})
+	if res.Error != nil {
+		if errors.Is(res.Error, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "pr not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "ERROR", res.Error.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"pr": res.Data})
 }
 
-// /pullRequest/reassign
 func (h *Handler) Reassign(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	h.log.Info("received request Reassign")
+
 	var payload struct {
 		PullRequestID string `json:"pull_request_id"`
 		OldUserID     string `json:"old_user_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := decodeBody(r, &payload); err != nil {
 		h.log.Warn("invalid request body", "error", err)
-		writeError(w, 400, "INVALID", "invalid body")
+		writeError(w, http.StatusBadRequest, "INVALID", "invalid body")
 		return
 	}
-	if payload.PullRequestID == "" || payload.OldUserID == "" {
-		h.log.Warn("missing fields in request", "payload", payload)
-		writeError(w, 400, "INVALID", "missing fields")
+
+	if err := validateReassignPayload(payload); err != nil {
+		h.log.Warn("validation failed", "payload", payload, "error", err)
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
 		return
 	}
 
@@ -243,56 +250,181 @@ func (h *Handler) Reassign(w http.ResponseWriter, r *http.Request) {
 			"old_user": payload.OldUserID,
 		},
 		RespCh: make(chan service.JobResult, 1),
+		Ctx:    ctx,
 	}
-
 	h.svc.EnqueueJob(job)
-	res := <-job.RespCh
+
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
+		return
+	}
 
 	if res.Error != nil {
 		switch {
 		case errors.Is(res.Error, service.ErrNotFound):
-			writeError(w, 404, "NOT_FOUND", "pr or user not found")
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "pr or user not found")
 		case errors.Is(res.Error, service.ErrPRMerged):
-			writeError(w, 409, "PR_MERGED", "cannot reassign on merged PR")
+			writeError(w, http.StatusConflict, "PR_MERGED", "cannot reassign on merged PR")
 		case errors.Is(res.Error, service.ErrNotAssigned):
-			writeError(w, 409, "NOT_ASSIGNED", "reviewer is not assigned to this PR")
+			writeError(w, http.StatusConflict, "NOT_ASSIGNED", "reviewer is not assigned to this PR")
 		case errors.Is(res.Error, service.ErrNoCandidate):
-			writeError(w, 409, "NO_CANDIDATE", "no active replacement candidate in team")
+			writeError(w, http.StatusConflict, "NO_CANDIDATE", "no active replacement candidate in team")
 		default:
-			writeError(w, 500, "ERROR", res.Error.Error())
+			writeError(w, http.StatusInternalServerError, "ERROR", res.Error.Error())
 		}
 		return
 	}
 
 	data := res.Data.(map[string]interface{})
-	writeJSON(w, 200, data)
+	writeJSON(w, http.StatusOK, data)
 }
 
-// /users/getReview?user_id=...
+type getTeamRequest struct {
+	TeamName string
+}
+
+func (h *Handler) GetTeam(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	req := getTeamRequest{
+		TeamName: r.URL.Query().Get("team_name"),
+	}
+
+	if err := validateGetTeamRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
+		return
+	}
+
+	job := service.Job{
+		Type: "get_team",
+		Payload: map[string]interface{}{
+			"team": req.TeamName,
+		},
+		RespCh: make(chan service.JobResult, 1),
+		Ctx:    ctx,
+	}
+	h.svc.EnqueueJob(job)
+
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
+		return
+	}
+
+	if res.Error != nil {
+		if errors.Is(res.Error, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "team not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "ERROR", res.Error.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res.Data)
+}
+
+type getUserReviewsRequest struct {
+	UserID string
+}
+
 func (h *Handler) GetUserReviews(w http.ResponseWriter, r *http.Request) {
-	uid := r.URL.Query().Get("user_id")
-	h.log.Info("received request GetUserReviews", "user_id", uid)
-	if uid == "" {
-		h.log.Warn("user_id missing in request")
-		writeError(w, 400, "INVALID", "user_id required")
+	ctx := r.Context()
+	h.log.Info("received request GetUserReviews")
+	req := getUserReviewsRequest{
+		UserID: r.URL.Query().Get("user_id"),
+	}
+
+	if err := validateGetUserReviewsRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID", err.Error())
 		return
 	}
 
 	job := service.Job{
 		Type: "get_reviews",
 		Payload: map[string]interface{}{
-			"uid": uid,
+			"uid": req.UserID,
 		},
 		RespCh: make(chan service.JobResult, 1),
+		Ctx:    ctx,
 	}
-
 	h.svc.EnqueueJob(job)
-	res := <-job.RespCh
 
-	if res.Error != nil {
-		writeError(w, 500, "ERROR", res.Error.Error())
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
 		return
 	}
 
-	writeJSON(w, 200, map[string]interface{}{"user_id": uid, "pull_requests": res.Data})
+	if res.Error != nil {
+		writeError(w, http.StatusInternalServerError, "ERROR", res.Error.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"user_id": req.UserID, "pull_requests": res.Data})
+}
+
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	h.log.Info("received request GetStats")
+	stats, err := h.svc.GetStats(ctx)
+	if err != nil {
+		h.log.Error("failed to get stats", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"error": map[string]string{
+				"code":    "ERROR",
+				"message": err.Error(),
+			},
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (h *Handler) DeactivateTeam(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	h.log.Info("received request deactivate team")
+
+	type req struct {
+		Team string `json:"team_name"`
+	}
+	var body req
+	if err := decodeJSON(r.Body, &body); err != nil {
+		h.log.Error("invalid request body", "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+
+	respCh := make(chan service.JobResult, 1)
+	job := service.Job{
+		Type: "deactivate_team",
+		Payload: map[string]interface{}{
+			"team_name": body.Team,
+		},
+		RespCh: respCh,
+		Ctx:    ctx,
+	}
+	h.svc.EnqueueJob(job)
+
+	res, err := waitJob(ctx, job.RespCh)
+	if err != nil {
+		writeError(w, http.StatusGatewayTimeout, "CANCELED", "request canceled")
+		return
+	}
+
+	if res.Error != nil {
+		h.log.Error("failed to deactivate team", "team_name", body.Team, "error", res.Error)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": res.Error.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "success"})
+}
+
+func waitJob(ctx context.Context, ch <-chan service.JobResult) (service.JobResult, error) {
+	select {
+	case res := <-ch:
+		return res, nil
+	case <-ctx.Done():
+		return service.JobResult{}, ctx.Err()
+	}
 }

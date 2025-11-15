@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -58,8 +61,10 @@ func main() {
 	r.Post("/pullRequest/merge", h.MergePR)
 	r.Post("/pullRequest/reassign", h.Reassign)
 	r.Get("/users/getReview", h.GetUserReviews)
+	r.Get("/stats", h.GetStats)
+	r.Post("/team/deactivate", h.DeactivateTeam)
 
-	s := &http.Server{
+	server := &http.Server{
 		Addr:              ":" + port,
 		Handler:           r,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -67,9 +72,32 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 	}
 
-	appLog.Info("server starting", "port", port)
-	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		appLog.Error("server failed", "error", err)
-		os.Exit(1)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		appLog.Info("server starting", "port", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			appLog.Error("server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-stop
+	appLog.Info("shutdown signal received")
+
+	svc.StopWorkers()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		appLog.Error("server forced to shutdown", "error", err)
 	}
+
+	if err := db.Close(); err != nil {
+		appLog.Error("failed to close database", "error", err)
+	}
+
+	appLog.Info("server exited properly")
 }
