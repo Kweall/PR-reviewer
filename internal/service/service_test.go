@@ -12,13 +12,13 @@ import (
 	"PR-reviewer/internal/service"
 )
 
-type mockLogger struct{}
+type dummyLogger struct{}
 
-func (m *mockLogger) Info(msg string, kv ...any)               {}
-func (m *mockLogger) Success(msg string, kv ...any)            {}
-func (m *mockLogger) Warn(msg string, kv ...any)               {}
-func (m *mockLogger) Error(msg string, kv ...any)              {}
-func (m *mockLogger) WithWorker(workerID string) logger.Logger { return m }
+func (m *dummyLogger) Info(msg string, kv ...any)               {}
+func (m *dummyLogger) Success(msg string, kv ...any)            {}
+func (m *dummyLogger) Warn(msg string, kv ...any)               {}
+func (m *dummyLogger) Error(msg string, kv ...any)              {}
+func (m *dummyLogger) WithWorker(workerID string) logger.Logger { return m }
 
 type mockRepo struct {
 	InsertTeamFunc                 func(ctx context.Context, t models.Team) error
@@ -124,7 +124,7 @@ func (m *mockRepo) GetReviewerStats(ctx context.Context) (map[string]int, error)
 }
 
 func newTestService(mockR *mockRepo) *service.PRService {
-	mockL := &mockLogger{}
+	mockL := &dummyLogger{}
 	return service.NewService(mockR, mockL)
 }
 
