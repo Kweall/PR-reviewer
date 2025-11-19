@@ -15,17 +15,17 @@ import (
 	"PR-reviewer/internal/service"
 )
 
-type mockLogger struct{}
+type dummyLogger struct{}
 
-func (m *mockLogger) Info(msg string, kv ...any)               {}
-func (m *mockLogger) Success(msg string, kv ...any)            {}
-func (m *mockLogger) Warn(msg string, kv ...any)               {}
-func (m *mockLogger) Error(msg string, kv ...any)              {}
-func (m *mockLogger) WithWorker(workerID string) logger.Logger { return m }
+func (m *dummyLogger) Info(msg string, kv ...any)               {}
+func (m *dummyLogger) Success(msg string, kv ...any)            {}
+func (m *dummyLogger) Warn(msg string, kv ...any)               {}
+func (m *dummyLogger) Error(msg string, kv ...any)              {}
+func (m *dummyLogger) WithWorker(workerID string) logger.Logger { return m }
 
 func newTestHandler(t *testing.T, svc *mocks.ServiceMock) *Handler {
 	t.Helper()
-	return NewHandler(svc, &mockLogger{})
+	return NewHandler(svc, &dummyLogger{})
 }
 
 func TestAddTeam(t *testing.T) {
