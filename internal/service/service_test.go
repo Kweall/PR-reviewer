@@ -27,6 +27,8 @@ type mockRepo struct {
 	GetPRFunc                      func(ctx context.Context, prID string) (models.PullRequest, error)
 	CreatePRFunc                   func(ctx context.Context, pr models.PullRequest) error
 	MergePRFunc                    func(ctx context.Context, prID string, t time.Time) (models.PullRequest, error)
+	AddReviewerFunc                func(ctx context.Context, prID, userID string) error
+	CleanupInactiveReviewersFunc   func(ctx context.Context, prID string) error
 	GetUserTeamFunc                func(ctx context.Context, userID string) (string, error)
 	GetActiveTeamMembersExceptFunc func(ctx context.Context, teamName, exclude string) ([]string, error)
 	GetUserFunc                    func(ctx context.Context, userID string) (models.User, error)
@@ -71,6 +73,12 @@ func (m *mockRepo) MergePR(ctx context.Context, prID string, t time.Time) (model
 		return m.MergePRFunc(ctx, prID, t)
 	}
 	return models.PullRequest{}, nil
+}
+func (m *mockRepo) AddReviewer(ctx context.Context, prID, userID string) (models.PullRequest, error) {
+	return models.PullRequest{}, m.AddReviewerFunc(ctx, prID, userID)
+}
+func (m *mockRepo) CleanupInactiveReviewers(ctx context.Context, prID string) error {
+	return m.CleanupInactiveReviewersFunc(ctx, prID)
 }
 func (m *mockRepo) GetUserTeam(ctx context.Context, userID string) (string, error) {
 	if m.GetUserTeamFunc != nil {

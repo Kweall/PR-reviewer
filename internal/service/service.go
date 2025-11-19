@@ -387,6 +387,12 @@ func (s *PRService) MergePR(ctx context.Context, prID string) (models.PullReques
 }
 
 func (s *PRService) Reassign(ctx context.Context, prID, oldUser string) (models.PullRequest, string, error) {
+
+	err := s.repo.CleanupInactiveReviewers(ctx, prID)
+	if err != nil {
+		s.log.Warn("failed to cleanup inactive reviewers", "pr", prID, "error", err)
+	}
+
 	pr, err := s.repo.GetPR(ctx, prID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -478,15 +484,43 @@ func (s *PRService) Reassign(ctx context.Context, prID, oldUser string) (models.
 		return models.PullRequest{}, "", ErrNoCandidate
 	}
 
-	pr, err = s.repo.ReplaceReviewer(ctx, prID, oldUser, newUID)
+	currentAssigned := pr.Assigned
+	newAssignments := []string{newUID}
+
+	for _, candidate := range avail {
+		if candidate == newUID {
+			continue
+		}
+		if len(currentAssigned)+len(newAssignments)-1 >= maxReviewers {
+			break
+		}
+		newAssignments = append(newAssignments, candidate)
+	}
+
+	var updatedPR models.PullRequest
+	if len(newAssignments) == 1 {
+		updatedPR, err = s.repo.ReplaceReviewer(ctx, prID, oldUser, newUID)
+	} else {
+		updatedPR, err = s.repo.ReplaceReviewer(ctx, prID, oldUser, newUID)
+		if err == nil {
+			for i := 1; i < len(newAssignments); i++ {
+				additionalUser := newAssignments[i]
+				updatedPR, err = s.repo.AddReviewer(ctx, prID, additionalUser)
+				if err != nil {
+					s.log.Error("failed to add additional reviewer", "pr", prID, "user", additionalUser, "error", err)
+				}
+			}
+		}
+	}
+
 	if err != nil {
 		s.log.Error("failed to replace reviewer", "pr", prID, "oldUser", oldUser, "error", err)
 		return models.PullRequest{}, "", err
 	}
 
-	pr.NeedMoreReviewers = len(pr.Assigned) < maxReviewers
+	updatedPR.NeedMoreReviewers = len(updatedPR.Assigned) < maxReviewers
 
-	return pr, newUID, nil
+	return updatedPR, newUID, nil
 }
 
 func (s *PRService) GetPRsByReviewer(ctx context.Context, userID string) ([]models.PullRequestShort, error) {

@@ -15,6 +15,7 @@ var (
 	errMissingPullRequestID = errors.New("pull_request_id required")
 	errMissingFieldsPR      = errors.New("missing fields")
 	errInvalidBody          = errors.New("invalid body")
+	errDuplicates           = errors.New("duplicates user_id's")
 )
 
 func decodeBody(r *http.Request, dst interface{}) error {
@@ -31,6 +32,13 @@ func decodeBody(r *http.Request, dst interface{}) error {
 func validateTeam(team models.Team) error {
 	if team.TeamName == "" {
 		return errMissingTeamName
+	}
+	userIDs := make(map[string]bool)
+	for _, member := range team.Members {
+		if userIDs[member.UserID] {
+			return errDuplicates
+		}
+		userIDs[member.UserID] = true
 	}
 	return nil
 }

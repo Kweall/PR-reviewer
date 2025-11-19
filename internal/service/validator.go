@@ -11,6 +11,7 @@ var (
 	errMissingAuthorID = errors.New("author_id required")
 	errMissingUserID   = errors.New("user_id required")
 	errMissingTeamName = errors.New("team_name required")
+	errDuplicates      = errors.New("duplicates user_id's")
 )
 
 func validatePullRequest(pr models.PullRequest) error {
@@ -36,6 +37,13 @@ func validateUserID(userID string) error {
 func validateTeam(team models.Team) error {
 	if team.TeamName == "" {
 		return errMissingTeamName
+	}
+	userIDs := make(map[string]bool)
+	for _, member := range team.Members {
+		if userIDs[member.UserID] {
+			return errDuplicates
+		}
+		userIDs[member.UserID] = true
 	}
 	return nil
 }

@@ -17,6 +17,8 @@ type Repo interface {
 	GetPR(ctx context.Context, prID string) (models.PullRequest, error)
 	MergePR(ctx context.Context, prID string, t time.Time) (models.PullRequest, error)
 	ReplaceReviewer(ctx context.Context, prID, oldUID, newUID string) (models.PullRequest, error)
+	AddReviewer(ctx context.Context, prID, userID string) (models.PullRequest, error)
+	CleanupInactiveReviewers(ctx context.Context, prID string) error
 
 	GetActiveTeamMembersExcept(ctx context.Context, teamName, exceptUser string) ([]string, error)
 	GetUserTeam(ctx context.Context, userID string) (string, error)

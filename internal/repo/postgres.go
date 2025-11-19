@@ -107,9 +107,9 @@ func (r *PostgresRepo) CreatePR(ctx context.Context, pr models.PullRequest) erro
 	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO pull_requests(pull_request_id, pull_request_name, author_id, status, created_at)
-         VALUES ($1,$2,$3,$4,$5)`,
-		pr.PullRequestID, pr.PullRequestName, pr.AuthorID, pr.Status, pr.CreatedAt)
+		`INSERT INTO pull_requests(pull_request_id, pull_request_name, author_id, status, need_more_reviewers, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+		pr.PullRequestID, pr.PullRequestName, pr.AuthorID, pr.Status, pr.NeedMoreReviewers, pr.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert pr: %w", err)
 	}
@@ -137,8 +137,8 @@ func (r *PostgresRepo) GetPR(ctx context.Context, prID string) (models.PullReque
 	var pr models.PullRequest
 	var mergedAt sql.NullTime
 
-	row := r.db.QueryRowContext(ctx, `SELECT pull_request_id, pull_request_name, author_id, status, created_at, merged_at FROM pull_requests WHERE pull_request_id = $1`, prID)
-	if err := row.Scan(&pr.PullRequestID, &pr.PullRequestName, &pr.AuthorID, &pr.Status, &pr.CreatedAt, &mergedAt); err != nil {
+	row := r.db.QueryRowContext(ctx, `SELECT pull_request_id, pull_request_name, author_id, status, need_more_reviewers, created_at, merged_at FROM pull_requests WHERE pull_request_id = $1`, prID)
+	if err := row.Scan(&pr.PullRequestID, &pr.PullRequestName, &pr.AuthorID, &pr.Status, &pr.NeedMoreReviewers, &pr.CreatedAt, &mergedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return pr, fmt.Errorf("not found")
 		}
@@ -190,12 +190,20 @@ func (r *PostgresRepo) ReplaceReviewer(ctx context.Context, prID, oldUID, newUID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM pr_reviewers WHERE pull_request_id=$1 AND user_id=$2`, prID, oldUID); err != nil {
-		return models.PullRequest{}, fmt.Errorf("delete old reviewer: %w", err)
+	if oldUID != "" {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pr_reviewers WHERE pull_request_id=$1 AND user_id=$2`, prID, oldUID); err != nil {
+			return models.PullRequest{}, fmt.Errorf("delete old reviewer: %w", err)
+		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO pr_reviewers(pull_request_id, user_id) VALUES ($1,$2)`, prID, newUID); err != nil {
-		return models.PullRequest{}, fmt.Errorf("insert new reviewer: %w", err)
+	if newUID != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO pr_reviewers(pull_request_id, user_id) VALUES ($1,$2)`, prID, newUID); err != nil {
+			return models.PullRequest{}, fmt.Errorf("insert new reviewer: %w", err)
+		}
+	}
+
+	if oldUID == "" && newUID == "" {
+		return models.PullRequest{}, fmt.Errorf("invalid replace: both old and new empty")
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -203,6 +211,26 @@ func (r *PostgresRepo) ReplaceReviewer(ctx context.Context, prID, oldUID, newUID
 	}
 
 	return r.GetPR(ctx, prID)
+}
+
+func (r *PostgresRepo) AddReviewer(ctx context.Context, prID, userID string) (models.PullRequest, error) {
+	_, err := r.db.ExecContext(ctx, `INSERT INTO pr_reviewers(pull_request_id, user_id) VALUES ($1,$2)`, prID, userID)
+	if err != nil {
+		return models.PullRequest{}, fmt.Errorf("insert reviewer: %w", err)
+	}
+	return r.GetPR(ctx, prID)
+}
+
+func (r *PostgresRepo) CleanupInactiveReviewers(ctx context.Context, prID string) error {
+	_, err := r.db.ExecContext(ctx, `
+        DELETE FROM pr_reviewers 
+        WHERE pull_request_id = $1 
+        AND user_id IN (SELECT user_id FROM users WHERE is_active = false)
+    `, prID)
+	if err != nil {
+		return fmt.Errorf("cleanup inactive reviewers: %w", err)
+	}
+	return nil
 }
 
 func (r *PostgresRepo) GetActiveTeamMembersExcept(ctx context.Context, teamName, exceptUser string) ([]string, error) {
