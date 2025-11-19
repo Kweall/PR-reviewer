@@ -141,12 +141,42 @@ go test ./e2e -v
   * `u1` – Alice (active: true)
   * `u2` – Bob (active: true)
   * `u3` – Charlie (active: false)
+* Endpoint: POST `/team/add`
+* Body:
+```
+{
+    "team_name": "backend",
+    "members": [
+                {"user_id": "u1",
+                "username": "Alice", 
+                "is_active": true
+                },
+                {"user_id": "u2",
+                "username": "Bob", 
+                "is_active": true
+                },
+                {"user_id": "u3",
+                "username": "Charlie", 
+                "is_active": false
+                }
+    ]
+}
+```
 * **Result:** Team created successfully, members added.
 
 ### 2. Create Pull Request
 
 * PR: `Test PR` (`pr-10000`)
 * Author: `u1`
+* Endpoint: POST `/pullRequest/create`
+* Body:
+```
+{
+    "pull_request_id": "pr-4008",
+    "pull_request_name": "Example example",
+    "author_id": "u2"
+}
+```
 * **Result:** PR created and assigned automatically to `u2`.
 
 ### 3. Get Team Info
@@ -157,14 +187,35 @@ go test ./e2e -v
 ### 4. Reassign Pull Request
 
 * PR `pr-10000` reassigned to user `u2`
+* Endpoint: POST `/pullRequest/reassign`
+* Body:
+```
+{
+  "pull_request_id": "pr-1000",
+  "old_user_id": "u2"
+}
+
+```
 * **Result:** Successfully reassigned.
 
-### 5. Get User Reviews
+### 5. Merge Pull Request
+
+* PR: `Test PR` `pr-10000`
+* Endpoint: POST `/pullRequest/merge`
+* Body:
+```
+{
+  "pull_request_id": "pr-4008"
+}
+```
+* **Result:** Successfully merged.
+
+### 6. Get User Reviews
 
 * Endpoint: GET `/users/getReview`
 * **Result:** Successfully retrieved all reviews.
 
-### 6. Deactivate Team
+### 7. Deactivate Team
 
 * Endpoint: POST `/team/deactivate`
 * **Result:** Team `backend` deactivated successfully, verified in DB.
@@ -224,3 +275,7 @@ golangci-lint run
 ### Вывод
 
 Все сценарии нагрузочного тестирования успешно выполнены. Время отклика и успешность запросов полностью соответствуют заданным SLI. Приложение устойчиво работает при нагрузке, превышающей целевой RPS (5 RPS), с большим запасом по времени отклика и успешности.
+
+## Вопросы/проблемы
+
+В задании было условие: при создании PR автоматически назначаются до двух активных ревьюверов из команды автора, исключая самого автора. Но не совсем ясно, может ли автор впоследствии быть назначенным ревьюером. Думаю, что при различных обстоятельствах это может произойти, поэтому допустил такую возможность.
